@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Client Pong TCP</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #222;
+            color: #fff;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: #333;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+        }
+        h1, h2 {
+            text-align: center;
+        }
+        .status {
+            margin: 20px 0;
+            padding: 10px;
+            background-color: #444;
+            border-radius: 5px;
+        }
+        .game-status {
+            display: flex;
+            justify-content: space-between;
+            margin: 20px 0;
+        }
+        .player {
+            text-align: center;
+            padding: 10px;
+            width: 45%;
+            background-color: #555;
+            border-radius: 5px;
+        }
+        .player.ready {
+            background-color: #063;
+        }
+        .player.not-ready {
+            background-color: #900;
+        }
+        .controls {
+            margin: 20px 0;
+            text-align: center;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        pre {
+            background-color: #222;
+            padding: 10px;
+            border-radius: 5px;
+            overflow-x: auto;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .ball {
+            position: relative;
+            width: 100%;
+            height: 40px;
+            margin: 20px 0;
+            background-color: #222;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        .ball-dot {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            background-color: yellow;
+            border-radius: 50%;
+            top: 15px;
+            left: 50%;
+            transform: translateX(-50%);
+        }
+        .paddle {
+            width: 10px;
+            height: 30px;
+            background-color: white;
+            position: absolute;
+            top: 5px;
+        }
+        .paddle-left {
+            left: 5px;
+        }
+        .paddle-right {
+            right: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Client Pong TCP</h1>
+        
+        <div class="status" id="connection-status">
+            Statut de connexion: Déconnecté
+        </div>
+        
+        <div class="game-status">
+            <div class="player not-ready" id="player1">
+                <h3>Joueur 1</h3>
+                <p>Statut: Pas prêt</p>
+            </div>
+            <div class="player not-ready" id="player2">
+                <h3>Joueur 2</h3>
+                <p>Statut: Pas prêt</p>
+            </div>
+        </div>
+        
+        <div class="ball">
+            <div class="paddle paddle-left" id="paddle1"></div>
+            <div class="ball-dot" id="ball"></div>
+            <div class="paddle paddle-right" id="paddle2"></div>
+        </div>
+        
+        <h2 id="score">Score: 0 - 0</h2>
+        
+        <div class="controls">
+            <button id="connect-btn">Connecter</button>
+            <button id="ready-btn" disabled>Prêt</button>
+            <button id="up-btn" disabled>Haut</button>
+            <button id="down-btn" disabled>Bas</button>
+        </div>
+        
+        <h3>Console</h3>
+        <pre id="console-output"></pre>
+    </div>
+
+    <script>
+        // Configuration
+        const SERVER_HOST = "127.0.0.1";
+        const SERVER_PORT = "9090";
+        const TCP_PROXY_URL = `http://${SERVER_HOST}:8081/tcp-proxy`;
+        
+        // Types de messages
+        const MSG_TYPE_GAME_STATE = 1;
+        const MSG_TYPE_PLAYER_MOVE = 2;
+        const MSG_TYPE_PLAYER_JOIN = 3;
+        const MSG_TYPE_PLAYER_READY = 4;
+        
+        // Éléments DOM
+        const connectBtn = document.getElementById('connect-btn');
+        const readyBtn = document.getElementById('ready-btn');
+        const upBtn = document.getElementById('up-btn');
+        const downBtn = document.getElementById('down-btn');
+        const connectionStatus = document.getElementById('connection-status');
+        const player1Div = document.getElementById('player1');
+        const player2Div = document.getElementById('player2');
+        const consoleOutput = document.getElementById('console-output');
+        const scoreDisplay = document.getElementById('score');
+        const ball = document.getElementById('ball');
+        const paddle1 = document.getElementById('paddle1');
+        const paddle2 = document.getElementById('paddle2');
+        
+        // État du client
+        let isConnected = false;
+        let playerId = 0;
+        let player1Ready = false;
+        let player2Ready = false;
+        let isReady = false;
+        let gameStarted = false;
+        let gameState = {
+            player1Y: 250,
+            player2Y: 250,
+            ballX: 400,
+            ballY: 300,
+            player1Score: 0,
+            player2Score: 0
+        };
+        
+        // Fonctions utilitaires
+        function log(message) {
+            consoleOutput.textContent += message + '\n';
+            consoleOutput.scrollTop = consoleOutput.scrollHeight;
+        }
+        
+        // Mise à jour de l'interface
+        function updateUI() {
+            // Mise à jour des boutons
+            readyBtn.disabled = !isConnected || gameStarted;
+            upBtn.disabled = !isConnected;
+            downBtn.disabled = !isConnected;
+            connectBtn.textContent = isConnected ? "Déconnecter" : "Connecter";
+            
+            // Mise à jour du statut de connexion
+            connectionStatus.textContent = isConnected 
+                ? `Connecté (Joueur ${playerId})` 
+                : "Statut de connexion: Déconnecté";
+            
+            // Mise à jour des joueurs
+            player1Div.className = player1Ready ? "player ready" : "player not-ready";
+            player1Div.querySelector("p").textContent = player1Ready ? "Statut: Prêt" : "Statut: Pas prêt";
+            
+            player2Div.className = player2Ready ? "player ready" : "player not-ready";
+            player2Div.querySelector("p").textContent = player2Ready ? "Statut: Prêt" : "Statut: Pas prêt";
+            
+            // Mise à jour du score
+            scoreDisplay.textContent = `Score: ${gameState.player1Score} - ${gameState.player2Score}`;
+            
+            // Mise à jour de la position des éléments du jeu
+            const ballX = (gameState.ballX / 800) * 100;
+            const paddle1Y = (gameState.player1Y / 600) * 30;
+            const paddle2Y = (gameState.player2Y / 600) * 30;
+            
+            ball.style.left = `${ballX}%`;
+            paddle1.style.top = `${paddle1Y}px`;
+            paddle2.style.top = `${paddle2Y}px`;
+        }
+        
+        // Fonctions de communication
+        async function connectToServer() {
+            if (isConnected) {
+                isConnected = false;
+                log("Déconnecté du serveur");
+                updateUI();
+                return;
+            }
+            
+            try {
+                log(`Tentative de connexion à ${TCP_PROXY_URL}...`);
+                const response = await fetch(`${TCP_PROXY_URL}/connect`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        host: SERVER_HOST,
+                        port: SERVER_PORT
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Erreur de connexion: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                if (data.success) {
+                    isConnected = true;
+                    log(`Connecté au serveur: ${data.message}`);
+                    startReceiveLoop();
+                } else {
+                    log(`Échec de connexion: ${data.message}`);
+                }
+            } catch (error) {
+                log(`Erreur: ${error.message}`);
+            }
+            
+            updateUI();
+        }
+        
+        async function startReceiveLoop() {
+            while (isConnected) {
+                try {
+                    const response = await fetch(`${TCP_PROXY_URL}/receive`, {
+                        method: 'GET'
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error(`Erreur de réception: ${response.statusText}`);
+                    }
+                    
+                    const data = await response.json();
+                    if (data.success && data.data) {
+                        handleMessage(data.data);
+                    }
+                    
+                    // Petite pause pour éviter de surcharger le serveur
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                } catch (error) {
+                    log(`Erreur de réception: ${error.message}`);
+                    // Ne déconnecte pas automatiquement en cas d'erreur
+                    // Nous allons simplement logger l'erreur et continuer
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+            }
+        }
+        
+        function handleMessage(messageData) {
+            try {
+                // Décoder le message
+                const binary = atob(messageData);
+                const bytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) {
+                    bytes[i] = binary.charCodeAt(i);
+                }
+                
+                // Analyser l'en-tête
+                if (bytes.length < 5) {
+                    log("Message reçu trop court");
+                    return;
+                }
+                
+                const msgType = bytes[0];
+                const dataView = new DataView(bytes.buffer);
+                const msgLength = dataView.getUint32(1, false);  // big-endian
+                
+                log(`Message reçu - Type: ${msgType}, Longueur: ${msgLength}`);
+                
+                if (bytes.length < 5 + msgLength) {
+                    log("Message incomplet reçu");
+                    return;
+                }
+                
+                const payload = bytes.slice(5, 5 + msgLength);
+                
+                // Traiter le message selon son type
+                switch (msgType) {
+                    case MSG_TYPE_GAME_STATE:
+                        handleGameState(payload);
+                        break;
+                    case MSG_TYPE_PLAYER_JOIN:
+                        handlePlayerJoin(payload);
+                        break;
+                    case MSG_TYPE_PLAYER_READY:
+                        handlePlayerReady(payload);
+                        break;
+                    case MSG_TYPE_PLAYER_MOVE:
+                        // On ignore silencieusement les messages de mouvement des joueurs
+                        // Ces messages sont envoyés par les autres clients au serveur
+                        break;
+                    default:
+                        log(`Type de message inconnu: ${msgType}`);
+                }
+            } catch (error) {
+                log(`Erreur de traitement du message: ${error.message}`);
+            }
+        }
+        
+        function handleGameState(payload) {
+            const dataView = new DataView(payload.buffer);
+            
+            gameState.player1Y = dataView.getFloat32(0, false);
+            gameState.player2Y = dataView.getFloat32(4, false);
+            gameState.ballX = dataView.getFloat32(8, false);
+            gameState.ballY = dataView.getFloat32(12, false);
+            gameState.player1Score = payload[16];
+            gameState.player2Score = payload[17];
+            
+            if (player1Ready && player2Ready) {
+                gameStarted = true;
+            }
+            
+            updateUI();
+        }
+        
+        function handlePlayerJoin(payload) {
+            log(`Reçu message PlayerJoin: payload=${Array.from(payload)}`);
+            playerId = payload[0];
+            log(`Vous êtes le joueur ${playerId}`);
+            updateUI();
+        }
+        
+        function handlePlayerReady(payload) {
+            const playerID = payload[0];
+            const ready = payload[1] === 1;
+            
+            if (playerID === 1) {
+                player1Ready = ready;
+                log(`Joueur 1 est ${ready ? 'prêt' : 'pas prêt'}`);
+            } else if (playerID === 2) {
+                player2Ready = ready;
+                log(`Joueur 2 est ${ready ? 'prêt' : 'pas prêt'}`);
+            }
+            
+            updateUI();
+        }
+        
+        async function sendMessage(msgType, payload) {
+            if (!isConnected) return;
+            
+            try {
+                const header = new Uint8Array(5);
+                header[0] = msgType;
+                
+                const dataView = new DataView(header.buffer);
+                dataView.setUint32(1, payload.length, false);  // big-endian
+                
+                const message = new Uint8Array(5 + payload.length);
+                message.set(header, 0);
+                message.set(payload, 5);
+                
+                // Convertir le message en base64
+                let binary = '';
+                for (let i = 0; i < message.length; i++) {
+                    binary += String.fromCharCode(message[i]);
+                }
+                const base64 = btoa(binary);
+                
+                const response = await fetch(`${TCP_PROXY_URL}/send`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        data: base64
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Erreur d'envoi: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                if (!data.success) {
+                    log(`Échec d'envoi: ${data.message}`);
+                }
+            } catch (error) {
+                log(`Erreur d'envoi: ${error.message}`);
+            }
+        }
+        
+        function sendPlayerReady() {
+            if (!isConnected || playerId === 0) {
+                log(`Impossible de se déclarer prêt: ${!isConnected ? 'Non connecté' : 'Pas d\'ID de joueur'}`);
+                return;
+            }
+            
+            isReady = !isReady;
+            
+            const payload = new Uint8Array(2);
+            payload[0] = playerId;
+            payload[1] = isReady ? 1 : 0;
+            
+            log(`Envoi de l'état prêt: joueur=${playerId}, prêt=${isReady ? 'oui' : 'non'}`);
+            sendMessage(MSG_TYPE_PLAYER_READY, payload);
+            log(`Vous êtes ${isReady ? 'prêt' : 'pas prêt'}`);
+        }
+        
+        function sendPlayerMove(direction) {
+            if (!isConnected || playerId === 0) return;
+            
+            const payload = new Uint8Array(2);
+            payload[0] = playerId;
+            payload[1] = direction;
+            
+            sendMessage(MSG_TYPE_PLAYER_MOVE, payload);
+        }
+        
+        // Gestionnaires d'événements
+        connectBtn.addEventListener('click', connectToServer);
+        readyBtn.addEventListener('click', sendPlayerReady);
+        upBtn.addEventListener('click', () => sendPlayerMove(-1));
+        downBtn.addEventListener('click', () => sendPlayerMove(1));
+        
+        // Mise à jour initiale de l'interface
+        updateUI();
+    </script>
+</body>
+</html>
